@@ -14,13 +14,9 @@
 namespace mpi = boost::mpi;
 using namespace std;
 
-// CONSTANTS //
-
 const string FILENAME = "graph.txt";
 const double epsilon = pow(10, -6);
 const double alpha = 0.2;
-
-// CONSTANTS ENDS//
 
 vector<int> row_begin;
 vector<double> values;
@@ -31,10 +27,11 @@ vector<double> values_metis;
 vector<int> col_indices_metis;
 
 vector<double> first_5;
-clock_t start; // to start time
-double duration; // to calculate how much time has passed during calculations
+clock_t start; // start time
+double duration; // how much time has passed during calculations
 
-/* to multiply  P and r_t matrices in parallel
+/**
+ * Multiplies  P and r_t matrices in parallel
  *
  * parameters:
  * r^t_1: output vector for multiplication (P*r^t)
@@ -62,7 +59,9 @@ void multiplication(double *r_t_1_, double *values_, int *col_indices_, int *row
 }
 
 
-/* to calculate length
+/**
+ * Calculates Frobenius norm of difference of two vectors
+ *
  * if the sum of the absolute values of each element of these two vectors is
  * below a certain threshold (𝜀), iteration ends. the method is for calculate this value
  *
@@ -84,7 +83,8 @@ double calculate_length(double *r_t_, double *r_t_1_, int M)
     return sum;
 }
 
-/* calculates r^(t+1) =αPr(t)+(1-α)c
+/**
+ * Calculates r^(t+1) =αPr(t)+(1-α)c
  *
  * parameters:
  * r^t_1: first, P*r^(t). After calculation: αPr^(t)+(1-α)c
@@ -99,8 +99,7 @@ void repeat(double *r_t_1_, int M, double alpha)
     }
 }
 
-/* does loop body
- *
+/**
  * parameters:
  * M: length of original matrix
  * chunk: chunk size
@@ -138,6 +137,7 @@ int main(int argc, char *argv[])
     cout << world.rank() << ", " << world.size() << '\n';
 
     if(world.rank() == 0){
+        // MASTER
 
         // took word length of nodes.
         int word_length = 26;
@@ -356,7 +356,7 @@ int main(int argc, char *argv[])
         ofstream myfile;
         myfile.open("output.csv");
 
-        // TODO: Distribute P matrix to slaves
+        // TODO: Distribute matrix P to slaves
         body_loop(M);
         myfile.close();
 
@@ -412,7 +412,7 @@ int main(int argc, char *argv[])
             }
         }
     } else {
-
+        // SLAVE
 
 
     }
