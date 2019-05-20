@@ -7,8 +7,11 @@
 #include <iterator>
 #include <memory>
 #include <math.h>
-#include <omp.h>
+#include <metis.h>
+#include <algorithm>
+#include <boost/mpi.hpp>
 
+namespace mpi = boost::mpi;
 using namespace std;
 
 // CONSTANTS //
@@ -241,181 +244,186 @@ string body_main(int M, int chunk, int schedule_type)
     return r;
 }
 
-int main()
+int main(int argc, char *argv[])
 {
+    mpi::environment env(argc, argv);
+    mpi::communicator world;
+
+    int num_processors = world.size();
+
     // took word length of nodes.
     int word_length = 26;
 
-    // read from file
-    FILE *file;
-    long size;
-    char *buffer;
-    size_t result;
-
-    // read as a binary
-    file = fopen(FILENAME.c_str(), "rb");
-    if (file == NULL)
-    {
-        fputs("File Error", stderr);
-        exit(1);
-    }
-
-    // go to end of the file
-    fseek(file, 0, SEEK_END);
-
-    // find the size of the file
-    size = ftell(file);
-
-    // go to start of the file
-    rewind(file);
-
-    buffer = (char *)malloc(sizeof(char) * size);
-    if (buffer == NULL)
-    {
-        fputs("Memory Error", stderr);
-        exit(2);
-    }
-    result = fread(buffer, 1, size, file);
-    if (result != size)
-    {
-        fputs("Reading Error", stderr);
-        exit(3);
-    }
-
-    cout << "file created " << endl;
-
-    string s;
-    s.assign(&buffer[size - (word_length + 1)], word_length);
-
-    // umap of index for all Nodes
-    unordered_map<string, int> input_list;
-    // unorderd map for counters of all nodes.
-    unordered_map<int, int> counter_list;
-
-
-    string old = "";
-    int count = 0;
-
-    string a, b;
-    int index = 0;
-
-    /*
-    read all lines and numbered only outgoing sides to edges.
-    fill the row_begin vector.
-    */
-    for (int i = 0; i < size; i += ((word_length + 1) * 2))
-    {
-        b.assign(&buffer[i + (word_length + 1)], word_length);
-        unordered_map<string, int>::iterator it_b = input_list.find(b);
-
-        if (it_b == input_list.end())
+    if(world.rank() == 0) {
+        /* MASTER */
+        // read from file
+        FILE *file;
+        long size;
+        char *buffer;
+        size_t result;
+        // read as a binary
+        file = fopen(FILENAME.c_str(), "rb");
+        if (file == NULL)
         {
-            input_list.insert(make_pair(b, index));
-            counter_list.insert(make_pair(index, 0));
-            index++;
+            fputs("File Error", stderr);
+            exit(1);
         }
-        if (old != b)
-        {
-            row_begin.push_back(count);
-        }
-        old = b;
-        count++;
-    }
-    row_begin.push_back(count);
+        // go to end of the file
+        fseek(file, 0, SEEK_END);
 
-    /*
-    read all lines and numbered necessery nodes.
-    fill the col_indices vector.
-    */
-    for (int i = 0; i < size; i += ((word_length + 1) * 2))
-    {
-        a.assign(&buffer[i], word_length);
-        unordered_map<string, int>::iterator it_a = input_list.find(a);
+        // find the size of the file
+        size = ftell(file);
 
-        if (it_a == input_list.end())
+        // go to start of the file
+        rewind(file);
+        buffer = (char *)malloc(sizeof(char) * size);
+
+        if (buffer == NULL)
         {
-            input_list.insert(make_pair(a, index));
-            counter_list.insert(make_pair(index, 1));
-            row_begin.push_back(count);
-            index++;
+            fputs("Memory Error", stderr);
+            exit(2);
         }
-        else
+        result = fread(buffer, 1, size, file);
+        if (result != size)
         {
-            unordered_map<int, int>::iterator it_a_counter = counter_list.find(it_a->second);
-            it_a_counter->second++;
+            fputs("Reading Error", stderr);
+            exit(3);
         }
 
-        it_a = input_list.find(a);
+        cout << "file created " << endl;
+        string s;
+        s.assign(&buffer[size - (word_length + 1)], word_length);
 
-        col_indices.push_back(it_a->second);
-    }
+        // umap of index for all Nodes
+        unordered_map<string, int> input_list;
+        // unorderd map for counters of all nodes.
+        unordered_map<int, int> counter_list;
 
-    /*
-    fill values vector.
-    */
-    int k = 0;
-    for (int i = 1; i < row_begin.size(); i++)
-    {
-        for (int j = row_begin[i - 1]; j < row_begin[i]; j++)
+
+        string old = "";
+        int count = 0;
+
+        string a, b;
+        int index = 0;
+
+        /*
+        read all lines and numbered only outgoing sides to edges.
+        fill the row_begin vector.
+        */
+        for (int i = 0; i < size; i += ((word_length + 1) * 2))
         {
-            unordered_map<int, int>::iterator it_counter = counter_list.find(col_indices[k]);
-            if (it_counter != counter_list.end()) {
-              values.push_back((double)1 / (it_counter->second));
+            b.assign(&buffer[i + (word_length + 1)], word_length);
+            unordered_map<string, int>::iterator it_b = input_list.find(b);
+
+            if (it_b == input_list.end())
+            {
+                input_list.insert(make_pair(b, index));
+                counter_list.insert(make_pair(index, 0));
+                index++;
             }
-            k++;
-        }
-    }
-
-    int M = row_begin.size() - 1; // number of nodes
-
-    // project 2
-    /*
-    * counter_metis: counts the row number of the locations on the matrix.
-    * row_begin_metis: new row vector for matrix.
-    * col_indices_metis: new column vector for matrix.
-    * values_metis: new values vector for matrix.
-    *
-    * row_counter_metis: counts the new elements that will be added to new row vector.
-    * temp_col: stores elements that will be added to col_indices_metis.
-    * --> temp_col must be sorted for CSR matrix format.
-    */
-
-    int counter_metis = 0;
-    int row_counter_metis = 0;
-    row_begin_metis.push_back(row_counter_metis);
-    for (int i = 1; i < row_begin.size(); i++) {
-
-      vector<int> temp_col;
-
-      for (int j = row_begin[i]; j < row_begin[i-1]; j++) {
-        temp_col.push_back(col_indices[j]);
-      }
-
-      for (int j = 0; j < col_indices.size(); j++) {
-        if (col_indices[j] == counter_metis) {
-          for (int k = 0; k < row_begin.size(); k++) {
-            if (row_begin[k] >= j) {
-              temp_col.push_back(k);
-              break;
+            if (old != b)
+            {
+                row_begin.push_back(count);
             }
-          }
+            old = b;
+            count++;
         }
-      }
+        row_begin.push_back(count);
 
-      sort(temp_col.begin(), temp_col.end());
-      col_indices_metis.push_back(temp_col[0]);
-      values_metis.push_back(1);
+        /*
+        read all lines and numbered necessary nodes.
+        fill the col_indices vector.
+        */
+        for (int i = 0; i < size; i += ((word_length + 1) * 2))
+        {
+            a.assign(&buffer[i], word_length);
+            unordered_map<string, int>::iterator it_a = input_list.find(a);
 
-      for (int j = 1; j < temp_col.size(); j++) {
-        if (temp_col[j] != temp_col[j-1]) {
-          col_indices_metis.push_back(temp_col[j]);
-          values_metis.push_back(1);
+            if (it_a == input_list.end())
+            {
+                input_list.insert(make_pair(a, index));
+                counter_list.insert(make_pair(index, 1));
+                row_begin.push_back(count);
+                index++;
+            }
+            else
+            {
+                unordered_map<int, int>::iterator it_a_counter = counter_list.find(it_a->second);
+                it_a_counter->second++;
+            }
+
+            it_a = input_list.find(a);
+
+            col_indices.push_back(it_a->second);
         }
-      }
 
-      counter_metis ++;
-      row_counter_metis = col_indices_metis.size();
-      row_begin_metis.push_back(row_counter_metis);
+        /*
+        fill values vector.
+        */
+        int k = 0;
+        for (int i = 1; i < row_begin.size(); i++)
+        {
+            for (int j = row_begin[i - 1]; j < row_begin[i]; j++)
+            {
+                unordered_map<int, int>::iterator it_counter = counter_list.find(col_indices[k]);
+                if (it_counter != counter_list.end()) {
+                    values.push_back((double)1 / (it_counter->second));
+                }
+                k++;
+            }
+        }
+
+        int M = row_begin.size() - 1; // number of nodes
+
+        // project 2
+        /*
+        * counter_metis: counts the row number of the locations on the matrix.
+        * row_begin_metis: new row vector for matrix.
+        * col_indices_metis: new column vector for matrix.
+        * values_metis: new values vector for matrix.
+        *
+        * row_counter_metis: counts the new elements that will be added to new row vector.
+        * temp_col: stores elements that will be added to col_indices_metis.
+        * --> temp_col must be sorted for CSR matrix format.
+        */
+
+        int counter_metis = 0;
+        int row_counter_metis = 0;
+        row_begin_metis.push_back(row_counter_metis);
+        for (int i = 1; i < row_begin.size(); i++) {
+
+            vector<int> temp_col;
+
+            for (int j = row_begin[i]; j < row_begin[i-1]; j++) {
+                temp_col.push_back(col_indices[j]);
+            }
+
+            for (int j = 0; j < col_indices.size(); j++) {
+                if (col_indices[j] == counter_metis) {
+                    for (int k = 0; k < row_begin.size(); k++) {
+                        if (row_begin[k] >= j) {
+                            temp_col.push_back(k);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            sort(temp_col.begin(), temp_col.end());
+            col_indices_metis.push_back(temp_col[0]);
+            values_metis.push_back(1);
+
+            for (int j = 1; j < temp_col.size(); j++) {
+                if (temp_col[j] != temp_col[j-1]) {
+                    col_indices_metis.push_back(temp_col[j]);
+                    values_metis.push_back(1);
+                }
+            }
+
+            counter_metis ++;
+            row_counter_metis = col_indices_metis.size();
+            row_begin_metis.push_back(row_counter_metis);
+        }
     }
 
     /*
@@ -486,15 +494,6 @@ int main()
       } else if (first_5[i] > arr[4]) {
         arr[4] = first_5[i];
         arr_index[4] = i;
-      }
-    }
-
-    // print top 5 ranks strings.
-    for (int k = 0; k < 5; k++) {
-      for ( unordered_map<string, int>::iterator it_counter = input_list.begin(); it_counter != input_list.end(); ++it_counter ) {
-        if (it_counter->second == arr_index[k]) {
-          cout << it_counter->first << endl;
-        }
       }
     }
 
