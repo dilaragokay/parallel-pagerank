@@ -249,18 +249,19 @@ int main(int argc, char *argv[])
     mpi::environment env(argc, argv);
     mpi::communicator world;
 
-    int num_processors = world.size();
+    cout << world.rank() << ", " << world.size() << '\n';
 
-    // took word length of nodes.
-    int word_length = 26;
+    if(world.rank() == 0){
 
-    if(world.rank() == 0) {
-        /* MASTER */
+        // took word length of nodes.
+        int word_length = 26;
+
         // read from file
         FILE *file;
         long size;
         char *buffer;
         size_t result;
+
         // read as a binary
         file = fopen(FILENAME.c_str(), "rb");
         if (file == NULL)
@@ -268,6 +269,7 @@ int main(int argc, char *argv[])
             fputs("File Error", stderr);
             exit(1);
         }
+
         // go to end of the file
         fseek(file, 0, SEEK_END);
 
@@ -424,6 +426,51 @@ int main(int argc, char *argv[])
             row_counter_metis = col_indices_metis.size();
             row_begin_metis.push_back(row_counter_metis);
         }
+
+        idx_t nVertices = row_begin_metis.size();
+        idx_t nParts    = 4;
+
+        idx_t objval;
+        idx_t part[row_begin_metis.size()];
+
+        // Indexes of starting points in adjacent array
+        idx_t xadj[row_begin_metis.size() + 1];
+        for (int l = 0; l < row_begin_metis.size() + 1; ++l) {
+            xadj[l] = row_begin_metis[l];
+        }
+
+        // Adjacent vertices in consecutive index order
+        idx_t adjncy[col_indices_metis.size() + 1];
+        for (int l = 0; l < col_indices_metis.size() + 1; ++l) {
+            adjncy[l] = col_indices_metis[l];
+        }
+
+        int ret = METIS_PartGraphRecursive(
+                &nVertices, // The number of vertices in the graph.
+                0,
+                xadj,
+                adjncy,
+                NULL,
+                NULL,
+                NULL,
+                &nParts, // The number of parts to partition the graph.
+                NULL,
+                NULL,
+                NULL,
+                &objval,
+                part
+                );
+
+        cout << ret << std::endl;
+
+        for(unsigned part_i = 0; part_i < nVertices; part_i++){
+            std::cout << part_i << " " << part[part_i] << std::endl;
+        }
+
+    } else {
+
+
+
     }
 
     /*
@@ -494,6 +541,15 @@ int main(int argc, char *argv[])
       } else if (first_5[i] > arr[4]) {
         arr[4] = first_5[i];
         arr_index[4] = i;
+      }
+    }
+
+    // print top 5 ranks strings.
+    for (int k = 0; k < 5; k++) {
+      for ( unordered_map<string, int>::iterator it_counter = input_list.begin(); it_counter != input_list.end(); ++it_counter ) {
+        if (it_counter->second == arr_index[k]) {
+          cout << it_counter->first << endl;
+        }
       }
     }
 
