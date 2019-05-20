@@ -430,10 +430,14 @@ int main(int argc, char *argv[])
         }
 
         idx_t nVertices = row_begin_metis.size();
-        idx_t nParts    = 4;
+        idx_t nParts    = 3;
 
         idx_t objval;
         idx_t part[row_begin_metis.size()];
+
+        idx_t options[METIS_NOPTIONS];
+        METIS_SetDefaultOptions(options);
+        options[METIS_OPTION_NUMBERING] = 1;
 
         // Indexes of starting points in adjacent array
         idx_t xadj[row_begin_metis.size() + 1];
@@ -458,7 +462,7 @@ int main(int argc, char *argv[])
                 &nParts, // The number of parts to partition the graph.
                 NULL,
                 NULL,
-                NULL,
+                options,
                 &objval,
                 part
                 );
