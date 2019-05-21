@@ -14,7 +14,7 @@
 namespace mpi = boost::mpi;
 using namespace std;
 
-const string FILENAME = "graph.txt";
+const string FILENAME = "/Users/dilaragokay/Parallel-PageRank/graph.txt";
 const double epsilon = pow(10, -6);
 const double alpha = 0.2;
 
@@ -135,107 +135,82 @@ int main(int argc, char *argv[])
     mpi::communicator world;
 
     cout << world.rank() << ", " << world.size() << '\n';
-
     if(world.rank() == 0){
         // MASTER
+        int word_length = 26;  // word length of nodes
 
-        // took word length of nodes.
-        int word_length = 26;
-
-        // read from file
+        // Read from file
         FILE *file;
         long size;
         char *buffer;
         size_t result;
 
-        // read as a binary
+        // Read the file as a binary
         file = fopen(FILENAME.c_str(), "rb");
-        if (file == NULL)
-        {
+        if (file == NULL) {
             fputs("File Error", stderr);
             exit(1);
         }
 
-        // go to end of the file
+        // Go to end of the file
         fseek(file, 0, SEEK_END);
 
-        // find the size of the file
+        // Find the size of the file
         size = ftell(file);
-
-        // go to start of the file
+        // Go to beginning of the file
         rewind(file);
         buffer = (char *)malloc(sizeof(char) * size);
 
-        if (buffer == NULL)
-        {
+        if (buffer == NULL) {
             fputs("Memory Error", stderr);
             exit(2);
         }
         result = fread(buffer, 1, size, file);
-        if (result != size)
-        {
+        if (result != size) {
             fputs("Reading Error", stderr);
             exit(3);
         }
-
-        cout << "file created " << endl;
+        cout << "File is created " << endl;
         string s;
         s.assign(&buffer[size - (word_length + 1)], word_length);
 
-        // umap of index for all Nodes
-        unordered_map<string, int> input_list;
-        // unorderd map for counters of all nodes.
-        unordered_map<int, int> counter_list;
-
+        unordered_map<string, int> input_list;  // name of the nodes and their indices
+        // TODO: fix the comment for counter_list
+        unordered_map<int, int> counter_list;  // unorderd map for counters of all nodes
 
         string old = "";
         int count = 0;
 
         string a, b;
         int index = 0;
-
-        /*
-        read all lines and numbered only outgoing sides to edges.
-        fill the row_begin vector.
-        */
-        for (int i = 0; i < size; i += ((word_length + 1) * 2))
-        {
+        // Read all lines of the file and enumerate nodes that have incoming edge(s)
+        for (int i = 0; i < size; i += ((word_length + 1) * 2)) {
             b.assign(&buffer[i + (word_length + 1)], word_length);
             unordered_map<string, int>::iterator it_b = input_list.find(b);
-
-            if (it_b == input_list.end())
-            {
+            if (it_b == input_list.end()) {
                 input_list.insert(make_pair(b, index));
                 counter_list.insert(make_pair(index, 0));
                 index++;
             }
-            if (old != b)
-            {
+            if (old != b) {
                 row_begin.push_back(count);
             }
             old = b;
             count++;
         }
         row_begin.push_back(count);
-
-        /*
-        read all lines and numbered necessary nodes.
-        fill the col_indices vector.
-        */
-        for (int i = 0; i < size; i += ((word_length + 1) * 2))
-        {
+        // Read all lines and enumerate the nodes that don't have any incoming edge
+        for (int i = 0; i < size; i += ((word_length + 1) * 2)) {
             a.assign(&buffer[i], word_length);
             unordered_map<string, int>::iterator it_a = input_list.find(a);
 
-            if (it_a == input_list.end())
-            {
+            if (it_a == input_list.end()) {
                 input_list.insert(make_pair(a, index));
                 counter_list.insert(make_pair(index, 1));
                 row_begin.push_back(count);
                 index++;
             }
-            else
-            {
+            else {
                 unordered_map<int, int>::iterator it_a_counter = counter_list.find(it_a->second);
                 it_a_counter->second++;
             }
@@ -244,10 +219,7 @@ int main(int argc, char *argv[])
 
             col_indices.push_back(it_a->second);
         }
-
-        /*
-        fill values vector.
-        */
+        // Fill values vector
         int k = 0;
         for (int i = 1; i < row_begin.size(); i++)
         {
@@ -260,37 +232,35 @@ int main(int argc, char *argv[])
                 k++;
             }
         }
-
         int M = row_begin.size() - 1; // number of nodes
-
-        // project 2
         /*
-        * counter_metis: counts the row number of the locations on the matrix.
-        * row_begin_metis: new row vector for matrix.
-        * col_indices_metis: new column vector for matrix.
-        * values_metis: new values vector for matrix.
-        *
-        * row_counter_metis: counts the new elements that will be added to new row vector.
-        * temp_col: stores elements that will be added to col_indices_metis.
-        * --> temp_col must be sorted for CSR matrix format.
-        */
-
+         * counter_metis: counts the row number of the locations on the matrix.
+         * row_begin_metis: new row vector for matrix.
+         * col_indices_metis: new column vector for matrix.
+         * values_metis: new values vector for matrix.
+         *
+         * row_counter_metis: counts the new elements that will be added to new row vector.
+         * temp_col: stores elements that will be added to col_indices_metis.
+         * --> temp_col must be sorted for CSR matrix format.
+         */
         int counter_metis = 0;
         int row_counter_metis = 0;
         row_begin_metis.push_back(row_counter_metis);
         for (int i = 1; i < row_begin.size(); i++) {
-
             vector<int> temp_col;
 
-            for (int j = row_begin[i]; j < row_begin[i-1]; j++) {
+            for (int j = row_begin[i-1]; j < row_begin[i]; j++) {
                 temp_col.push_back(col_indices[j]);
             }
-
             for (int j = 0; j < col_indices.size(); j++) {
                 if (col_indices[j] == counter_metis) {
                     for (int k = 0; k < row_begin.size(); k++) {
-                        if (row_begin[k] >= j) {
+                        if (row_begin[k] == j) {
                             temp_col.push_back(k);
+                            break;
+                        }
+                        else if (row_begin[k] > j) {
+                            temp_col.push_back(k - 1);
                             break;
                         }
                     }
@@ -302,38 +272,34 @@ int main(int argc, char *argv[])
             values_metis.push_back(1);
 
             for (int j = 1; j < temp_col.size(); j++) {
-                if (temp_col[j] != temp_col[j-1]) {
-                    col_indices_metis.push_back(temp_col[j]);
-                    values_metis.push_back(1);
-                }
+                col_indices_metis.push_back(temp_col[j]);
+                values_metis.push_back(1);
             }
 
             counter_metis ++;
             row_counter_metis = col_indices_metis.size();
-            row_begin_metis.push_back(row_counter_metis);
+            row_begin_metis.push_back(row_counter_metis + 1);
         }
+        idx_t nVertices = row_begin_metis.size() - 1;
+        idx_t nParts = 3;
+        idx_t balancingConstraint = 1;
 
-        idx_t nVertices = row_begin_metis.size();
-        idx_t nParts = 4;
-
-        idx_t objval;
+        idx_t objval = 0;
         idx_t part[row_begin_metis.size()];
-
         // Indexes of starting points in adjacent array
-        idx_t xadj[row_begin_metis.size() + 1];
-        for (int l = 0; l < row_begin_metis.size() + 1; ++l) {
+        idx_t xadj[row_begin_metis.size()];
+        for (int l = 0; l < row_begin_metis.size(); l++) {
             xadj[l] = row_begin_metis[l];
         }
-
         // Adjacent vertices in consecutive index order
-        idx_t adjncy[col_indices_metis.size() + 1];
-        for (int l = 0; l < col_indices_metis.size() + 1; ++l) {
+        idx_t adjncy[col_indices_metis.size()];
+
+        for (int l = 0; l < col_indices_metis.size(); l++) {
             adjncy[l] = col_indices_metis[l];
         }
-
         int ret = METIS_PartGraphRecursive(
                 &nVertices, // The number of vertices in the graph.
-                0,
+                &balancingConstraint,
                 xadj,
                 adjncy,
                 NULL,
@@ -346,8 +312,7 @@ int main(int argc, char *argv[])
                 &objval,
                 part
                 );
-
-        cout << ret << std::endl;
+        cout << "ret " << ret << std::endl;
 
         for(unsigned part_i = 0; part_i < nVertices; part_i++){
             std::cout << part_i << " " << part[part_i] << std::endl;
@@ -357,7 +322,7 @@ int main(int argc, char *argv[])
         myfile.open("output.csv");
 
         // TODO: Distribute matrix P to slaves
-        body_loop(M);
+        //body_loop(M);
         myfile.close();
 
         // took maximum 5 ranks and second array took the indexes of them.
