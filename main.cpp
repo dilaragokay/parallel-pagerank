@@ -10,11 +10,12 @@
 #include <metis.h>
 #include <algorithm>
 #include <boost/mpi.hpp>
+#include <boost/serialization/vector.hpp>
 
 namespace mpi = boost::mpi;
 using namespace std;
 
-const string FILENAME = "/Users/dilaragokay/Parallel-PageRank/graph.txt";
+const string FILENAME = "/Users/dilaragokay/Parallel-PageRank/exampleGraph.txt";
 const double epsilon = pow(10, -6);
 const double alpha = 0.2;
 
@@ -30,32 +31,35 @@ vector<double> first_5;
 clock_t start; // start time
 double duration; // how much time has passed during calculations
 
+vector<int> findProcessors(int rank, ) {
+
+}
+
 /**
  * Multiplies  P and r_t matrices in parallel
  *
  * parameters:
- * r^t_1: output vector for multiplication (P*r^t)
  * values_: the vector that contains values elements
  * col_indicies_: the vector that contains column indices elements
  * row_begin_: the vector that contains row begin elements
  * r_t_: the vector that contains r^t elements
- * M: length of original matrix
+ *
  */
-void multiplication(double *r_t_1_, double *values_, int *col_indices_, int *row_begin_, double *r_t_, int M)
+double multiplication(double *values_, int *col_indices_, int *row_begin_, double *r_t_)
 {
-    long i, j, it;
+    double zi = 0;
+    cout << "row_begin_[0] " << row_begin_[0] << endl;
+    cout << "row_begin_[1] " << row_begin_[1] << endl;
+    for (int it = row_begin_[0]; it < row_begin_[1]; it++)
     {
-        for (i = 0; i < M; i++)
-        {
-            double zi = 0.0;
-            for (it = row_begin_[i]; it < row_begin_[i + 1]; it++)
-            {
-                j = col_indices_[it];
-                zi += values_[it] * r_t_[j];
-            }
-            r_t_1_[i] = zi;
-        }
+        cout << "b" << endl;
+        int j = col_indices_[it];
+        cout << "values_[it] " << values_[it]<< endl;
+        cout << "r_t_[j] " << r_t_[j]<< endl;
+        zi += values_[it] * r_t_[j];
+        cout << "f" << endl;
     }
+    return zi;
 }
 
 
@@ -97,36 +101,6 @@ void repeat(double *r_t_1_, int M, double alpha)
     {
         r_t_1_[i] = r_t_1_[i] * alpha + (1 - alpha);
     }
-}
-
-/**
- * parameters:
- * M: length of original matrix
- * chunk: chunk size
- * num_threads: number of threads
- * schedule_type: schedule type
- *     Static ---> 1
- *     Dynamic ---> 2
- *     Guided ---> 3
- *
- * return value: string contains timings for each number of threads (in secs)
- */
-void body_loop(int M)
-{
-    vector<double> r_t;
-    vector<double> r_t_1(row_begin.size() - 1, 1.0);
-
-    int counter = 0;
-    do
-    {
-        r_t = r_t_1;
-        multiplication(&r_t_1[0], &values[0], &col_indices[0], &row_begin[0], &r_t[0], M);
-        repeat(&r_t_1[0], M, alpha);
-        counter++;
-
-    } while (calculate_length(&r_t[0], &r_t_1[0], M) > epsilon);
-    first_5 = r_t_1;
-    // TODO: return duration
 }
 
 int main(int argc, char *argv[])
@@ -321,8 +295,50 @@ int main(int argc, char *argv[])
         ofstream myfile;
         myfile.open("output.csv");
 
-        // TODO: Distribute matrix P to slaves
-        //body_loop(M);
+        vector<double> r_t;
+        vector<double> r_t_1(row_begin.size() - 1, 1.0);
+        bool repeats = true;
+        int counter = 0;
+        do
+        {
+            r_t = r_t_1;
+            // send P for multiplication and repeat
+            for(unsigned part_i = 0; part_i < nVertices; part_i++){
+                std::cout << part_i << " " << part[part_i] << std::endl;
+                // send each to related processor
+                vector<int>::const_iterator first_int = row_begin.begin() + part_i;
+                vector<int>::const_iterator last_int = row_begin.begin() + part_i + 2;
+                vector<int> row_begin_slave(first_int, last_int);
+
+                vector<double>::const_iterator first_double = values.begin() + row_begin[part_i];
+                vector<double>::const_iterator last_double = values.begin() + row_begin[part_i + 1];
+                vector<double> values_slave(first_double, last_double);
+
+                first_int = col_indices.begin() + row_begin[part_i];
+                last_int = col_indices.begin() + row_begin[part_i + 1];
+                vector<int> col_indices_slave(first_int, last_int);
+
+                world.send(part[part_i] + 1, 1, values_slave);
+                world.send(part[part_i] + 1, 2, col_indices_slave);
+                world.send(part[part_i] + 1, 3, r_t);
+                world.send(part[part_i] + 1, 4, row_begin_slave);
+
+                double mult_result;
+
+                world.recv(part[part_i] + 1, 5, mult_result);
+                cout << "result for " << part_i << " is " << mult_result << endl;
+                r_t_1[part_i] = mult_result;
+            }
+
+            repeat(&r_t_1[0], M, alpha);
+            counter++;
+            repeats = calculate_length(&r_t[0], &r_t_1[0], M) > epsilon;
+            world.send(1, 6, repeats);
+            world.send(2, 6, repeats);
+            world.send(3, 6, repeats);
+        } while (repeats);
+        first_5 = r_t_1;
+        // TODO: return duration
         myfile.close();
 
         // took maximum 5 ranks and second array took the indexes of them.
@@ -368,7 +384,7 @@ int main(int argc, char *argv[])
             }
         }
 
-        // print top 5 ranks strings.
+        // print top 5 ranked strings.
         for (int k = 0; k < 5; k++) {
             for ( unordered_map<string, int>::iterator it_counter = input_list.begin(); it_counter != input_list.end(); ++it_counter ) {
                 if (it_counter->second == arr_index[k]) {
@@ -378,11 +394,26 @@ int main(int argc, char *argv[])
         }
     } else {
         // SLAVE
+        vector<int> row_begin_slave;
+        vector<double> values_slave;
+        vector<int> col_indices_slave;
+        vector<double> r_t;
+        bool repeat = true;
+        while (repeat) {
+            world.recv(0, 1, values_slave);
+            world.recv(0, 2, col_indices_slave);
+            world.recv(0, 3, r_t);
+            world.recv(0, 4, row_begin_slave);
 
+            cout << world.rank() << " received sth" << endl;
 
+            double mult_result = multiplication(&values_slave[0], &col_indices_slave[0], &row_begin_slave[0], &r_t[0]);
+            cout << "mult result for process" << world.rank() << " is " << mult_result << endl;
+            world.send(0, 5, mult_result);
+
+            cout << world.rank() << " sent result" << endl;
+            world.recv(0, 6, repeat);
+        }
     }
-
-
-
     return 0;
 }
