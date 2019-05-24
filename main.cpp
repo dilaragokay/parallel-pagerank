@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <boost/mpi.hpp>
 #include <boost/serialization/vector.hpp>
+#include <boost/serialization/unordered_map.hpp>
 
 namespace mpi = boost::mpi;
 using namespace std;
@@ -31,8 +32,20 @@ vector<double> first_5;
 clock_t start; // start time
 double duration; // how much time has passed during calculations
 
-vector<int> findProcessors(int rank, ) {
-
+/**
+ * @param rank Rank of the processor
+ * @param part array which represents which node is assigned to which processor
+ * @param M length of part array
+ * @return vector of indices of nodes which are assigned to rank
+ */
+vector<int> findProcessors(int rank, idx_t *part, int M) {
+    vector<int> indicesOfNodes;
+    for (int i = 0 ; i < M ; i++) {
+        if (part[i] == rank) {
+            indicesOfNodes.push_back(i);
+        }
+    }
+    return indicesOfNodes;
 }
 
 /**
@@ -45,19 +58,13 @@ vector<int> findProcessors(int rank, ) {
  * r_t_: the vector that contains r^t elements
  *
  */
-double multiplication(double *values_, int *col_indices_, int *row_begin_, double *r_t_)
+double multiplication(vector<double> values_, vector<int> col_indices_, vector<int> row_begin_, vector<double> r_t_)
 {
     double zi = 0;
-    cout << "row_begin_[0] " << row_begin_[0] << endl;
-    cout << "row_begin_[1] " << row_begin_[1] << endl;
     for (int it = row_begin_[0]; it < row_begin_[1]; it++)
     {
-        cout << "b" << endl;
         int j = col_indices_[it];
-        cout << "values_[it] " << values_[it]<< endl;
-        cout << "r_t_[j] " << r_t_[j]<< endl;
         zi += values_[it] * r_t_[j];
-        cout << "f" << endl;
     }
     return zi;
 }
@@ -287,7 +294,6 @@ int main(int argc, char *argv[])
                 part
                 );
         cout << "ret " << ret << std::endl;
-
         for(unsigned part_i = 0; part_i < nVertices; part_i++){
             std::cout << part_i << " " << part[part_i] << std::endl;
         }
@@ -303,39 +309,30 @@ int main(int argc, char *argv[])
         {
             r_t = r_t_1;
             // send P for multiplication and repeat
-            for(unsigned part_i = 0; part_i < nVertices; part_i++){
-                std::cout << part_i << " " << part[part_i] << std::endl;
+            for(int part_i = 1; part_i <= nParts; part_i++){
+                vector<int> indicesOfNodes = findProcessors(part_i, part, nVertices);
                 // send each to related processor
-                vector<int>::const_iterator first_int = row_begin.begin() + part_i;
-                vector<int>::const_iterator last_int = row_begin.begin() + part_i + 2;
-                vector<int> row_begin_slave(first_int, last_int);
-
-                vector<double>::const_iterator first_double = values.begin() + row_begin[part_i];
-                vector<double>::const_iterator last_double = values.begin() + row_begin[part_i + 1];
-                vector<double> values_slave(first_double, last_double);
-
-                first_int = col_indices.begin() + row_begin[part_i];
-                last_int = col_indices.begin() + row_begin[part_i + 1];
-                vector<int> col_indices_slave(first_int, last_int);
-
-                world.send(part[part_i] + 1, 1, values_slave);
-                world.send(part[part_i] + 1, 2, col_indices_slave);
-                world.send(part[part_i] + 1, 3, r_t);
-                world.send(part[part_i] + 1, 4, row_begin_slave);
-
-                double mult_result;
-
-                world.recv(part[part_i] + 1, 5, mult_result);
-                cout << "result for " << part_i << " is " << mult_result << endl;
-                r_t_1[part_i] = mult_result;
+                world.send(part_i, 2, row_begin);
+                world.send(part_i, 4, values);
+                world.send(part_i, 5, col_indices);
+                world.send(part_i, 0, indicesOfNodes);
+                world.send(part_i, 1, r_t);
+            }
+            unordered_map<int, double> all_mult_results;
+            for (int part_i = 1; part_i <= nParts; part_i++) {
+                world.recv(part_i, 6, all_mult_results);
+                for (auto& it: all_mult_results) {
+                    r_t_1[it.first] = it.second;
+                }
             }
 
             repeat(&r_t_1[0], M, alpha);
             counter++;
-            repeats = calculate_length(&r_t[0], &r_t_1[0], M) > epsilon;
-            world.send(1, 6, repeats);
-            world.send(2, 6, repeats);
-            world.send(3, 6, repeats);
+            double length = calculate_length(&r_t[0], &r_t_1[0], M);
+            repeats = length > epsilon;
+            world.send(1, 3, repeats);
+            world.send(2, 3, repeats);
+            world.send(3, 3, repeats);
         } while (repeats);
         first_5 = r_t_1;
         // TODO: return duration
@@ -394,25 +391,34 @@ int main(int argc, char *argv[])
         }
     } else {
         // SLAVE
-        vector<int> row_begin_slave;
-        vector<double> values_slave;
-        vector<int> col_indices_slave;
+        vector<int> indicesOfNodes;
         vector<double> r_t;
         bool repeat = true;
+        vector<int> row_begin_received;
+        vector<double> values_received;
+        vector<int> col_indices_received;
         while (repeat) {
-            world.recv(0, 1, values_slave);
-            world.recv(0, 2, col_indices_slave);
-            world.recv(0, 3, r_t);
-            world.recv(0, 4, row_begin_slave);
+            world.recv(0, 2, row_begin_received);
+            world.recv(0, 4, values_received);
+            world.recv(0, 5, col_indices_received);
+            world.recv(0, 0, indicesOfNodes);
+            world.recv(0, 1, r_t);
+            unordered_map<int, double> all_mult_results;
+            for (int i = 0 ; i < indicesOfNodes.size() ; i++) {
+                int index = indicesOfNodes[i];
+                vector<int>::const_iterator first_int = row_begin_received.begin() + index;
+                vector<int>::const_iterator last_int = row_begin_received.begin() + index + 2;
+                vector<int> row_begin_slave(first_int, last_int);
 
-            cout << world.rank() << " received sth" << endl;
-
-            double mult_result = multiplication(&values_slave[0], &col_indices_slave[0], &row_begin_slave[0], &r_t[0]);
-            cout << "mult result for process" << world.rank() << " is " << mult_result << endl;
-            world.send(0, 5, mult_result);
-
-            cout << world.rank() << " sent result" << endl;
-            world.recv(0, 6, repeat);
+                if (row_begin_slave[0] == row_begin_slave[1]) {
+                    // values are finished
+                    break;
+                }
+                double mult_result = multiplication(values_received, col_indices_received, row_begin_slave, r_t);
+                all_mult_results.insert(make_pair(index, mult_result));
+            }
+            world.send(0, 6, all_mult_results);
+            world.recv(0, 3, repeat);
         }
     }
     return 0;
