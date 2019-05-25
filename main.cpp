@@ -270,6 +270,8 @@ int main(int argc, char *argv[])
         idx_t options[METIS_NOPTIONS];
         METIS_SetDefaultOptions(options);
         options[METIS_OPTION_NUMBERING] = 1;
+        options[METIS_OPTION_UFACTOR] = 15;
+        options[METIS_OPTION_MINCONN] = 1;
         // Indexes of starting points in adjacent array
         idx_t xadj[row_begin_metis.size()];
         for (int l = 0; l < row_begin_metis.size(); l++) {
@@ -281,7 +283,7 @@ int main(int argc, char *argv[])
         for (int l = 0; l < col_indices_metis.size(); l++) {
             adjncy[l] = col_indices_metis[l];
         }
-        int ret = METIS_PartGraphRecursive(
+        int ret = METIS_PartGraphKway(
                 &nVertices, // The number of vertices in the graph.
                 &balancingConstraint,
                 xadj,
